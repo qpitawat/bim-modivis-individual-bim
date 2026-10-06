@@ -8,6 +8,35 @@
     <link rel="stylesheet" href="TemplateData/style.css">
   </head>
   <body>
+    <script>
+      // Unity's compiled runtime (Emscripten/SDL2) attaches its own keyboard
+      // listener on document with capture:true once WebGL boots, which fires
+      // before anything our own widget listens for can run -- stopPropagation
+      // from a sibling element can't preempt an ancestor's capture listener.
+      // Intercept at addEventListener registration time instead: while the
+      // chat widget has focus, swallow keydown/keyup/keypress before Unity's
+      // own handler ever runs, regardless of how Unity wires up its listener.
+      (function () {
+        var chatFocused = false;
+        document.addEventListener("focusin", function (e) {
+          chatFocused = !!(e.target.closest && e.target.closest("#bim-chat-panel"));
+        });
+
+        var origAddEventListener = EventTarget.prototype.addEventListener;
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+          var isKeyEvent = type === "keydown" || type === "keyup" || type === "keypress";
+          var isChatsOwnElement = this && this.nodeType === 1 && this.closest && this.closest("#bim-chat-panel");
+          if (isKeyEvent && typeof listener === "function" && !isChatsOwnElement) {
+            var wrapped = function (e) {
+              if (chatFocused) return;
+              return listener.apply(this, arguments);
+            };
+            return origAddEventListener.call(this, type, wrapped, options);
+          }
+          return origAddEventListener.call(this, type, listener, options);
+        };
+      })();
+    </script>
     <div id="unity-container" style="width:100%; height: 100%;">
       <canvas id="unity-canvas" width=auto height=auto></canvas>
       <div id="unity-loading-bar">
@@ -99,6 +128,16 @@
 
       loadingBar.style.display = "block";
 
+      // Unity captures ALL page keyboard input by default, which blocks typing
+      // into the chat widget's input box. Only capture while the canvas itself
+      // has focus (e.g. camera controls), release it otherwise.
+      canvas.addEventListener("focus", function () {
+        if (typeof WebGLInput !== "undefined") WebGLInput.captureAllKeyboardInput = true;
+      }, true);
+      canvas.addEventListener("blur", function () {
+        if (typeof WebGLInput !== "undefined") WebGLInput.captureAllKeyboardInput = false;
+      }, true);
+
       var script = document.createElement("script");
       script.src = loaderUrl;
       script.onload = () => {
@@ -106,6 +145,8 @@
           progressBarFull.style.width = 100 * progress + "%";
         }).then((unityInstance) => {
           loadingBar.style.display = "none";
+          window.unityInstance = unityInstance;
+          if (typeof WebGLInput !== "undefined") WebGLInput.captureAllKeyboardInput = false;
           // fullscreenButton.onclick = () => {
           //   unityInstance.SetFullscreen(1);
           // };
@@ -115,5 +156,14 @@
       };
       document.body.appendChild(script);
     </script>
+
+    <script>
+      window.BIMChatWidgetConfig = {
+        apiEndpoint: "https://fsp74ffo6hr7asbr4m2bsvkspu0ujhvx.lambda-url.ap-southeast-1.on.aws/",
+        unityGameObject: "BIMController",
+        unityMethod: "HighlightElements",
+      };
+    </script>
+    <script src="chat-widget.js"></script>
   </body>
 </html>
